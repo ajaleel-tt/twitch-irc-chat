@@ -1,0 +1,11 @@
+# Binary
+twitch-chat
+
+# IDE
+.idea/
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
