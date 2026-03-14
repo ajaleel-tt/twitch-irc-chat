@@ -28,6 +28,7 @@ type Model struct {
 	client   *irc.Client
 	ctx      context.Context
 	lines    []string
+	sent     map[string]int // text -> count of pending local echoes to dedupe
 	channel  string
 	nick     string
 	ready    bool
@@ -47,6 +48,7 @@ func NewModel(client *irc.Client, ctx context.Context, channel, nick string) Mod
 		channel: channel,
 		nick:    nick,
 		lines:   []string{},
+		sent:    make(map[string]int),
 	}
 }
 
@@ -108,6 +110,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			name := usernameStyle("", m.nick).Render(m.nick)
 			sep := sepStyle.Render(": ")
 			m.appendLine(name + sep + msg.text)
+			m.sent[msg.text]++
 		} else {
 			m.appendLine(systemStyle.Render("[ERROR] Failed to send: " + msg.err.Error()))
 		}
@@ -141,9 +144,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleIRC(msg irc.Message) {
 	switch msg.Command {
 	case "PRIVMSG":
-		// Skip server echo of own messages (already displayed locally)
+		// Dedupe server echo of messages we sent from this terminal
 		if strings.EqualFold(msg.Nick, m.nick) {
-			return
+			if count, ok := m.sent[msg.Params]; ok && count > 0 {
+				m.sent[msg.Params]--
+				if m.sent[msg.Params] == 0 {
+					delete(m.sent, msg.Params)
+				}
+				return
+			}
 		}
 		cm := msg.ToChatMessage()
 		badges := badgePrefix(cm.Badges)
