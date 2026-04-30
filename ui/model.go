@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const maxLines = 1000
@@ -98,11 +99,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		inputHeight := 3 // border + input line + padding
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, msg.Height-inputHeight)
-			m.viewport.SetContent(strings.Join(m.lines, "\n"))
+			m.viewport.SetContent(m.wrappedContent())
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
 			m.viewport.Height = msg.Height - inputHeight
+			m.viewport.SetContent(m.wrappedContent())
 		}
 
 	case sendResult:
@@ -115,7 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendLine(systemStyle.Render("[ERROR] Failed to send: " + msg.err.Error()))
 		}
 		if m.ready {
-			m.viewport.SetContent(strings.Join(m.lines, "\n"))
+			m.viewport.SetContent(m.wrappedContent())
 			m.viewport.GotoBottom()
 		}
 
@@ -123,7 +125,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleIRC(irc.Message(msg))
 		if m.ready {
 			atBottom := m.viewport.AtBottom()
-			m.viewport.SetContent(strings.Join(m.lines, "\n"))
+			m.viewport.SetContent(m.wrappedContent())
 			if atBottom {
 				m.viewport.GotoBottom()
 			}
@@ -207,6 +209,21 @@ func (m *Model) appendLine(line string) {
 	if len(m.lines) > maxLines {
 		m.lines = m.lines[len(m.lines)-maxLines:]
 	}
+}
+
+func (m *Model) wrappedContent() string {
+	width := m.viewport.Width
+	if width <= 0 {
+		return strings.Join(m.lines, "\n")
+	}
+	var b strings.Builder
+	for i, line := range m.lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(ansi.Wordwrap(line, width, ""))
+	}
+	return b.String()
 }
 
 func (m Model) View() string {
