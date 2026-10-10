@@ -63,6 +63,7 @@ func waitForIRC(incoming <-chan irc.Message) tea.Cmd {
 	}
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
@@ -70,6 +71,7 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -143,6 +145,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m *Model) handleIRC(msg irc.Message) {
 	switch msg.Command {
 	case "PRIVMSG":
@@ -204,6 +207,7 @@ func (m *Model) handleIRC(msg irc.Message) {
 	}
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m *Model) appendLine(line string) {
 	m.lines = append(m.lines, line)
 	if len(m.lines) > maxLines {
@@ -211,6 +215,7 @@ func (m *Model) appendLine(line string) {
 	}
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m *Model) wrappedContent() string {
 	width := m.viewport.Width
 	if width <= 0 {
@@ -226,6 +231,7 @@ func (m *Model) wrappedContent() string {
 	return b.String()
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m Model) View() string {
 	if !m.ready {
 		return "Connecting to " + m.channel + "..."
