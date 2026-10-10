@@ -16,8 +16,6 @@ type Client struct {
 	nick     string
 	channel  string
 	incoming chan Message
-	outgoing chan string
-	done     chan struct{}
 }
 
 // NewClient creates a new IRC client for the given channel.
@@ -29,8 +27,6 @@ func NewClient(nick, channel string) *Client {
 		nick:     strings.ToLower(nick),
 		channel:  strings.ToLower(channel),
 		incoming: make(chan Message, 256),
-		outgoing: make(chan string, 64),
-		done:     make(chan struct{}),
 	}
 }
 
@@ -65,7 +61,6 @@ func (c *Client) Connect(ctx context.Context, token string) error {
 	}
 
 	go c.readLoop(ctx)
-	go c.writeLoop(ctx)
 
 	return nil
 }
@@ -103,20 +98,6 @@ func (c *Client) readLoop(ctx context.Context) {
 	}
 }
 
-func (c *Client) writeLoop(ctx context.Context) {
-	for {
-		select {
-		case text, ok := <-c.outgoing:
-			if !ok {
-				return
-			}
-			_ = c.send(ctx, text)
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
 // Incoming returns the channel of parsed incoming messages.
 func (c *Client) Incoming() <-chan Message {
 	return c.incoming
@@ -130,7 +111,6 @@ func (c *Client) SendMessage(ctx context.Context, text string) error {
 
 // Close gracefully shuts down the connection.
 func (c *Client) Close() {
-	close(c.outgoing)
 	if c.conn != nil {
 		c.conn.Close(websocket.StatusNormalClosure, "bye")
 	}
