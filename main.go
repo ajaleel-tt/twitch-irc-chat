@@ -15,10 +15,11 @@ func main() {
 	channel := flag.String("channel", "", "Twitch channel to join (required)")
 	token := flag.String("token", "", "OAuth token (or set TWITCH_TOKEN)")
 	nick := flag.String("nick", "", "Twitch username (or set TWITCH_NICK)")
+	hideJoins := flag.Bool("hide-joins", false, "Hide join/leave messages (useful in large channels)")
 	flag.Parse()
 
 	if *channel == "" {
-		fmt.Fprintln(os.Stderr, "Usage: twitch-chat --channel <channel> [--token <token>] [--nick <nick>]")
+		fmt.Fprintln(os.Stderr, "Usage: twitch-chat --channel <channel> [--token <token>] [--nick <nick>] [--hide-joins]")
 		os.Exit(1)
 	}
 
@@ -48,7 +49,7 @@ func main() {
 	}
 	defer client.Close()
 
-	model := ui.NewModel(client, ctx, *channel, *nick)
+	model := ui.NewModel(client, ctx, *channel, *nick, ui.Options{HideJoins: *hideJoins})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

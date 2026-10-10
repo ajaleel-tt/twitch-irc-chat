@@ -54,6 +54,15 @@ Or pass everything as flags:
 ./twitch-irc-chat --channel xqc --token your_oauth_token --nick your_twitch_username
 ```
 
+### Options
+
+| Flag | Description |
+|---|---|
+| `--channel` | Twitch channel to join (required) |
+| `--token` | OAuth token (or set `TWITCH_TOKEN`) |
+| `--nick` | Twitch username (or set `TWITCH_NICK`) |
+| `--hide-joins` | Hide "joined/left the channel" lines -- handy in large channels where they're mostly noise |
+
 ### Controls
 
 | Key | Action |
@@ -87,5 +96,5 @@ The TUI is built with [Bubbletea](https://github.com/charmbracelet/bubbletea) us
 ## Running Tests
 
 ```bash
-go test ./irc/...
+go test ./...
 ```

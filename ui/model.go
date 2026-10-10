@@ -22,6 +22,11 @@ type sendResult struct {
 	err  error
 }
 
+// Options configures optional display behavior of the chat UI.
+type Options struct {
+	HideJoins bool // suppress "joined/left the channel" lines
+}
+
 // Model is the Bubbletea model for the chat UI.
 type Model struct {
 	viewport viewport.Model
@@ -32,11 +37,12 @@ type Model struct {
 	sent     map[string]int // text -> count of pending local echoes to dedupe
 	channel  string
 	nick     string
+	opts     Options
 	ready    bool
 }
 
 // NewModel creates a new chat UI model.
-func NewModel(client *irc.Client, ctx context.Context, channel, nick string) Model {
+func NewModel(client *irc.Client, ctx context.Context, channel, nick string, opts Options) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message..."
 	ti.Focus()
@@ -48,6 +54,7 @@ func NewModel(client *irc.Client, ctx context.Context, channel, nick string) Mod
 		input:   ti,
 		channel: channel,
 		nick:    nick,
+		opts:    opts,
 		lines:   []string{},
 		sent:    make(map[string]int),
 	}
@@ -164,12 +171,12 @@ func (m *Model) handleIRC(msg irc.Message) {
 		m.appendLine(line)
 
 	case "JOIN":
-		if msg.Nick != "" {
+		if msg.Nick != "" && !m.opts.HideJoins {
 			m.appendLine(systemStyle.Render(fmt.Sprintf("* %s joined the channel", msg.Nick)))
 		}
 
 	case "PART":
-		if msg.Nick != "" {
+		if msg.Nick != "" && !m.opts.HideJoins {
 			m.appendLine(systemStyle.Render(fmt.Sprintf("* %s left the channel", msg.Nick)))
 		}
 
