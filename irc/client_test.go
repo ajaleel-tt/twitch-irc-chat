@@ -3,6 +3,11 @@ package irc
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,6 +106,128 @@ func TestSendReturnsErrorWhenWriteTimesOut(t *testing.T) {
 	err := c.SendMessage(ctx, "hi")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("SendMessage error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// blockedWriteConn lets the HTTP/WebSocket handshake complete, then simulates
+// a socket whose writes cannot progress. Closing the socket unblocks the write,
+// just as it would for a real network connection.
+type blockedWriteConn struct {
+	net.Conn
+	stallWrites  chan struct{}
+	writeStarted chan struct{}
+	closed       chan struct{}
+	writeOnce    sync.Once
+	closeOnce    sync.Once
+}
+
+func (c *blockedWriteConn) Write(p []byte) (int, error) {
+	select {
+	case <-c.stallWrites:
+		c.writeOnce.Do(func() { close(c.writeStarted) })
+		<-c.closed
+		return 0, net.ErrClosed
+	default:
+		return c.Conn.Write(p)
+	}
+}
+
+func (c *blockedWriteConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func TestWriteTimeoutClosesConnectionAndIncoming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept websocket: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		// Read until the client closes its socket; no Twitch connection is needed.
+		_, _, _ = conn.Read(r.Context())
+	}))
+	t.Cleanup(server.Close)
+
+	var socket *blockedWriteConn
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			socket = &blockedWriteConn{
+				Conn:         conn,
+				stallWrites:  make(chan struct{}),
+				writeStarted: make(chan struct{}),
+				closed:       make(chan struct{}),
+			}
+			return socket, nil
+		},
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), time.Second)
+	defer cancelDial()
+	conn, _, err := websocket.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.DialOptions{
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	close(socket.stallWrites)
+
+	c := NewClient("me", "mychannel")
+	c.conn = conn
+	// Keep the read context alive so only the write timeout can end this loop.
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	t.Cleanup(cancelRead)
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		c.readLoop(readCtx)
+	}()
+
+	// A shorter parent deadline exercises the real library's timeout behavior
+	// without waiting for the production 10-second timeout.
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelWrite()
+	writeResult := make(chan error, 1)
+	go func() { writeResult <- c.SendMessage(writeCtx, "hi") }()
+	select {
+	case err := <-writeResult:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("SendMessage error = %v, want context.DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendMessage stayed blocked after its write deadline")
+	}
+	select {
+	case <-socket.writeStarted:
+	default:
+		t.Fatal("write timed out before reaching the socket")
+	}
+	select {
+	case <-socket.closed:
+	default:
+		t.Fatal("write timeout did not close the socket")
+	}
+	select {
+	case _, ok := <-c.Incoming():
+		if ok {
+			t.Fatal("incoming delivered a message, want a closed channel")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("incoming channel stayed open after the write timeout")
+	}
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not exit after the write timeout")
+	}
+	if err := readCtx.Err(); err != nil {
+		t.Fatalf("read context ended independently of the write timeout: %v", err)
 	}
 }
 
