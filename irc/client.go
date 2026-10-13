@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -28,6 +29,10 @@ type Client struct {
 	nick     string
 	channel  string
 	incoming chan Message
+
+	mu         sync.Mutex
+	err        error  // why readLoop stopped; set before incoming is closed
+	lastNotice string // most recent server-wide NOTICE, e.g. a login failure
 }
 
 // NewClient creates a new IRC client for the given channel.
@@ -88,6 +93,7 @@ func (c *Client) readLoop(ctx context.Context) {
 	for {
 		_, data, err := c.conn.Read(ctx)
 		if err != nil {
+			c.setErr(err)
 			return
 		}
 		lines := strings.Split(string(data), "\r\n")
@@ -106,13 +112,39 @@ func (c *Client) readLoop(ctx context.Context) {
 				continue
 			}
 
+			// Twitch sends server-wide notices to "*" rather than a channel,
+			// e.g. "NOTICE * :Login authentication failed" before it hangs up.
+			if msg.Command == "NOTICE" && msg.Channel == "" {
+				c.mu.Lock()
+				c.lastNotice = strings.TrimPrefix(msg.Params, "* :")
+				c.mu.Unlock()
+			}
+
 			select {
 			case c.incoming <- msg:
 			case <-ctx.Done():
+				c.setErr(ctx.Err())
 				return
 			}
 		}
 	}
+}
+
+func (c *Client) setErr(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lastNotice != "" {
+		err = fmt.Errorf("%s: %w", c.lastNotice, err)
+	}
+	c.err = err
+}
+
+// Err returns why the connection ended, or nil while it is still open.
+// Once Incoming is closed, Err is non-nil.
+func (c *Client) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
 }
 
 // Incoming returns the channel of parsed incoming messages.

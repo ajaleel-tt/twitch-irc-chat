@@ -3,6 +3,8 @@ package irc
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,3 +119,96 @@ func (f writeFunc) Write(ctx context.Context, _ websocket.MessageType, _ []byte)
 }
 
 func (f writeFunc) Close(websocket.StatusCode, string) error { return nil }
+
+// scriptConn is a wsConn that returns frames in order, then fails every
+// Read with err, like a server sending some lines and hanging up.
+type scriptConn struct {
+	frames []string
+	err    error
+}
+
+func (s *scriptConn) Read(context.Context) (websocket.MessageType, []byte, error) {
+	if len(s.frames) == 0 {
+		return 0, nil, s.err
+	}
+	f := s.frames[0]
+	s.frames = s.frames[1:]
+	return websocket.MessageText, []byte(f), nil
+}
+
+func (s *scriptConn) Write(context.Context, websocket.MessageType, []byte) error { return nil }
+
+func (s *scriptConn) Close(websocket.StatusCode, string) error { return nil }
+
+// runUntilClosed runs readLoop over conn, drains Incoming until it closes,
+// and returns the delivered messages.
+func runUntilClosed(t *testing.T, conn wsConn) (*Client, []Message) {
+	t.Helper()
+	c := NewClient("me", "mychannel")
+	c.conn = conn
+	go c.readLoop(context.Background())
+
+	var got []Message
+	timeout := time.After(time.Second)
+	for {
+		select {
+		case msg, ok := <-c.Incoming():
+			if !ok {
+				return c, got
+			}
+			got = append(got, msg)
+		case <-timeout:
+			t.Fatal("Incoming was never closed")
+		}
+	}
+}
+
+func TestErrNilWhileConnected(t *testing.T) {
+	if err := NewClient("me", "mychannel").Err(); err != nil {
+		t.Errorf("Err() = %v, want nil before the connection ends", err)
+	}
+}
+
+func TestErrReportsReadFailure(t *testing.T) {
+	readErr := errors.New("connection reset")
+	c, got := runUntilClosed(t, &scriptConn{
+		frames: []string{":someone!someone@someone.tmi.twitch.tv PRIVMSG #mychannel :bye\r\n"},
+		err:    readErr,
+	})
+
+	if len(got) != 1 || got[0].Params != "bye" {
+		t.Errorf("delivered %v, want the PRIVMSG before the error", got)
+	}
+	if err := c.Err(); err == nil || !errors.Is(err, readErr) || err.Error() != readErr.Error() {
+		t.Errorf("Err() = %v, want exactly %v", err, readErr)
+	}
+}
+
+func TestErrIncludesServerNotice(t *testing.T) {
+	c, got := runUntilClosed(t, &scriptConn{
+		frames: []string{":tmi.twitch.tv NOTICE * :Login authentication failed\r\n"},
+		err:    io.EOF,
+	})
+
+	if len(got) != 1 || got[0].Command != "NOTICE" {
+		t.Errorf("delivered %v, want the NOTICE still passed to the UI", got)
+	}
+	err := c.Err()
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("Err() = %v, want it to wrap io.EOF", err)
+	}
+	if err == nil || !strings.HasPrefix(err.Error(), "Login authentication failed: ") {
+		t.Errorf("Err() = %v, want it to start with the notice text", err)
+	}
+}
+
+func TestErrIgnoresChannelNotice(t *testing.T) {
+	c, _ := runUntilClosed(t, &scriptConn{
+		frames: []string{"@msg-id=slow_on :tmi.twitch.tv NOTICE #mychannel :This room is now in slow mode.\r\n"},
+		err:    io.EOF,
+	})
+
+	if err := c.Err(); err != io.EOF {
+		t.Errorf("Err() = %v, want bare io.EOF; channel notices aren't disconnect reasons", err)
+	}
+}
