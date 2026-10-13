@@ -17,6 +17,12 @@ const maxLines = 1000
 
 type ircMsg irc.Message
 
+// ChatClient is the subset of the IRC client the UI depends on.
+type ChatClient interface {
+	Incoming() <-chan irc.Message
+	SendMessage(ctx context.Context, text string) error
+}
+
 type sendResult struct {
 	text string
 	err  error
@@ -26,7 +32,7 @@ type sendResult struct {
 type Model struct {
 	viewport viewport.Model
 	input    textinput.Model
-	client   *irc.Client
+	client   ChatClient
 	ctx      context.Context
 	lines    []string
 	sent     map[string]int // text -> count of pending local echoes to dedupe
@@ -36,7 +42,7 @@ type Model struct {
 }
 
 // NewModel creates a new chat UI model.
-func NewModel(client *irc.Client, ctx context.Context, channel, nick string) Model {
+func NewModel(client ChatClient, ctx context.Context, channel, nick string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message..."
 	ti.Focus()
