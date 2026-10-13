@@ -4,20 +4,30 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
 
 const twitchWSURL = "wss://irc-ws.chat.twitch.tv:443"
 
+// writeTimeout bounds every write. If it expires mid-write, websocket closes
+// the connection, which ends readLoop instead of leaving a dead socket open.
+const writeTimeout = 10 * time.Second
+
+// wsConn is the subset of *websocket.Conn the client uses.
+type wsConn interface {
+	Read(ctx context.Context) (websocket.MessageType, []byte, error)
+	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
+	Close(code websocket.StatusCode, reason string) error
+}
+
 // Client manages a WebSocket connection to Twitch IRC.
 type Client struct {
-	conn     *websocket.Conn
+	conn     wsConn
 	nick     string
 	channel  string
 	incoming chan Message
-	outgoing chan string
-	done     chan struct{}
 }
 
 // NewClient creates a new IRC client for the given channel.
@@ -29,8 +39,6 @@ func NewClient(nick, channel string) *Client {
 		nick:     strings.ToLower(nick),
 		channel:  strings.ToLower(channel),
 		incoming: make(chan Message, 256),
-		outgoing: make(chan string, 64),
-		done:     make(chan struct{}),
 	}
 }
 
@@ -65,12 +73,13 @@ func (c *Client) Connect(ctx context.Context, token string) error {
 	}
 
 	go c.readLoop(ctx)
-	go c.writeLoop(ctx)
 
 	return nil
 }
 
 func (c *Client) send(ctx context.Context, line string) error {
+	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
 	return c.conn.Write(ctx, websocket.MessageText, []byte(line+"\r\n"))
 }
 
@@ -88,9 +97,12 @@ func (c *Client) readLoop(ctx context.Context) {
 			}
 			msg := ParseMessage(line)
 
-			// Auto-respond to PING
+			// Auto-respond to PING. Write in the background so a stalled
+			// write can't stop us reading; send's timeout bounds the goroutine.
 			if msg.Command == "PING" {
-				_ = c.send(ctx, "PONG :"+msg.Params)
+				go func(params string) {
+					_ = c.send(ctx, "PONG :"+params)
+				}(msg.Params)
 				continue
 			}
 
@@ -103,34 +115,19 @@ func (c *Client) readLoop(ctx context.Context) {
 	}
 }
 
-func (c *Client) writeLoop(ctx context.Context) {
-	for {
-		select {
-		case text, ok := <-c.outgoing:
-			if !ok {
-				return
-			}
-			_ = c.send(ctx, text)
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
 // Incoming returns the channel of parsed incoming messages.
 func (c *Client) Incoming() <-chan Message {
 	return c.incoming
 }
 
 // SendMessage sends a PRIVMSG to the joined channel.
-// It blocks until the write completes and returns any error.
+// It blocks until the write completes or times out and returns any error.
 func (c *Client) SendMessage(ctx context.Context, text string) error {
 	return c.send(ctx, fmt.Sprintf("PRIVMSG %s :%s", c.channel, text))
 }
 
 // Close gracefully shuts down the connection.
 func (c *Client) Close() {
-	close(c.outgoing)
 	if c.conn != nil {
 		c.conn.Close(websocket.StatusNormalClosure, "bye")
 	}

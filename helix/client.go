@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type Client struct {
 	baseURL  string
 	idURL    string
 	token    string
+	mu       sync.RWMutex // protects clientID during validation and polling
 	clientID string
 }
 
@@ -98,7 +100,9 @@ func (c *Client) Validate(ctx context.Context) (TokenInfo, error) {
 	if err := c.do(req, &info); err != nil {
 		return info, err
 	}
+	c.mu.Lock()
 	c.clientID = info.ClientID
+	c.mu.Unlock()
 	return info, nil
 }
 
@@ -167,7 +171,9 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	c.mu.RLock()
 	req.Header.Set("Client-Id", c.clientID)
+	c.mu.RUnlock()
 	return c.do(req, out)
 }
 

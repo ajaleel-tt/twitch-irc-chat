@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -18,6 +19,38 @@ func newTestClient(t *testing.T, h http.HandlerFunc) *Client {
 	c.idURL = srv.URL + "/oauth2"
 	c.clientID = "cid"
 	return c
+}
+
+func TestValidateWhilePolling(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/validate" {
+			writeJSON(w, 200, map[string]string{"client_id": "cid"})
+			return
+		}
+		if got := r.Header.Get("Client-Id"); got != "cid" {
+			t.Errorf("Client-Id = %q, want cid", got)
+		}
+		writeJSON(w, 200, map[string]any{"data": []any{}, "pagination": map[string]string{}})
+	})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			if _, err := c.Validate(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			if _, err := c.Chatters(context.Background(), "1", "2"); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

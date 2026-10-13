@@ -19,7 +19,7 @@ func main() {
 	token := flag.String("token", "", "OAuth token (or set TWITCH_TOKEN)")
 	nick := flag.String("nick", "", "Twitch username (or set TWITCH_NICK)")
 	hideJoins := flag.Bool("hide-joins", false, "Hide join/leave messages (useful in large channels)")
-	pollChatters := flag.Duration("poll-chatters", 0, "Poll the chatter list at this interval (e.g. 30s) for accurate join/leave tracking; needs moderator:read:chatters")
+	pollChatters := flag.Duration("poll-chatters", 0, "Poll the delayed chatter list at this interval (e.g. 30s) to supplement IRC join/leave tracking; needs moderator:read:chatters")
 	flag.Parse()
 
 	if *channel == "" {

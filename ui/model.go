@@ -19,6 +19,12 @@ const maxLines = 1000
 
 type ircMsg irc.Message
 
+// ChatClient is the subset of the IRC client the UI depends on.
+type ChatClient interface {
+	Incoming() <-chan irc.Message
+	SendMessage(ctx context.Context, text string) error
+}
+
 type sendResult struct {
 	text string
 	err  error
@@ -58,7 +64,7 @@ type Options struct {
 type Model struct {
 	viewport viewport.Model
 	input    textinput.Model
-	client   *irc.Client
+	client   ChatClient
 	ctx      context.Context
 	lines    []string
 	sent     map[string]int // text -> count of pending local echoes to dedupe
@@ -74,7 +80,7 @@ type Model struct {
 }
 
 // NewModel creates a new chat UI model.
-func NewModel(client *irc.Client, ctx context.Context, channel, nick string, opts Options) Model {
+func NewModel(client ChatClient, ctx context.Context, channel, nick string, opts Options) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message..."
 	ti.Focus()
@@ -136,6 +142,7 @@ func (m Model) validateLater() tea.Cmd {
 	})
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textinput.Blink,
@@ -147,6 +154,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -222,6 +230,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m *Model) handleIRC(msg irc.Message) {
 	switch msg.Command {
 	case "PRIVMSG":
@@ -310,7 +319,7 @@ func (m *Model) handleChatters(msg chattersMsg) tea.Cmd {
 	first := !m.presence.seeded
 	joined, left := m.presence.reconcile(msg.logins, m.now())
 	if first && !m.opts.HideJoins {
-		m.appendLine(systemStyle.Render(fmt.Sprintf("* %d chatters in channel", len(msg.logins))))
+		m.appendLine(systemStyle.Render(fmt.Sprintf("* %d chatters currently tracked", len(m.presence.present))))
 	}
 	for _, l := range joined {
 		m.joinLine(l, "joined")
@@ -341,7 +350,7 @@ func (m *Model) joinLine(login, verb string) {
 		return
 	}
 	ts := m.now().Format("15:04:05")
-	m.appendLine(systemStyle.Render(fmt.Sprintf("* %s %s %s the channel", ts, login, verb)))
+	m.appendLine(systemStyle.Render(fmt.Sprintf("* %s %s the channel (detected at %s)", login, verb, ts)))
 }
 
 // refresh re-renders the viewport, staying pinned to the bottom if it was.
@@ -356,6 +365,7 @@ func (m *Model) refresh() {
 	}
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m *Model) appendLine(line string) {
 	m.lines = append(m.lines, line)
 	if len(m.lines) > maxLines {
@@ -363,6 +373,7 @@ func (m *Model) appendLine(line string) {
 	}
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m *Model) wrappedContent() string {
 	width := m.viewport.Width
 	if width <= 0 {
@@ -378,6 +389,7 @@ func (m *Model) wrappedContent() string {
 	return b.String()
 }
 
+//goland:noinspection GoMixedReceiverTypes
 func (m Model) View() string {
 	if !m.ready {
 		return "Connecting to " + m.channel + "..."

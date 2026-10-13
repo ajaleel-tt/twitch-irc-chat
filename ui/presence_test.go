@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -21,6 +22,60 @@ func TestPresenceIRCDedupe(t *testing.T) {
 	}
 	if p.part("alice", t0) {
 		t.Error("duplicate part should report false")
+	}
+}
+
+func TestPresenceFirstSnapshotPreservesRecentIRC(t *testing.T) {
+	for _, joined := range []bool{true, false} {
+		name := "part"
+		if joined {
+			name = "join"
+		}
+		t.Run(name, func(t *testing.T) {
+			p := newPresence(time.Minute)
+			var snapshot []string
+			if joined {
+				p.join("alice", t0)
+			} else {
+				p.seed([]string{"alice"})
+				p.part("alice", t0)
+				snapshot = []string{"alice"}
+			}
+			if j, l := p.reconcile(snapshot, t0.Add(time.Second)); len(j)+len(l) != 0 {
+				t.Fatalf("first snapshot announced changes: joined=%v left=%v", j, l)
+			}
+			if p.present["alice"] != joined {
+				t.Fatalf("first snapshot overwrote recent IRC %s", name)
+			}
+			// A repeated IRC event must not be announced a second time.
+			if joined && p.join("alice", t0.Add(2*time.Second)) {
+				t.Fatal("duplicate JOIN announced after first snapshot")
+			}
+			if !joined && p.part("alice", t0.Add(2*time.Second)) {
+				t.Fatal("duplicate PART announced after first snapshot")
+			}
+			// Once grace expires, the API snapshot wins again.
+			p.reconcile(snapshot, t0.Add(2*time.Minute))
+			if p.present["alice"] == joined {
+				t.Fatal("expired IRC event still overrides the snapshot")
+			}
+		})
+	}
+}
+
+func TestPresencePrunesIRCHistoryWithoutSnapshots(t *testing.T) {
+	p := newPresence(time.Minute)
+	for i := range 1000 {
+		login := fmt.Sprintf("user%d", i)
+		p.join(login, t0)
+		p.part(login, t0)
+	}
+	p.join("newuser", t0.Add(2*time.Minute))
+	if len(p.ircSeen) != 1 {
+		t.Fatalf("retained %d timestamps, want only the latest IRC event", len(p.ircSeen))
+	}
+	if !p.present["newuser"] || len(p.present) != 1 {
+		t.Fatalf("pruning changed presence: %v", p.present)
 	}
 }
 

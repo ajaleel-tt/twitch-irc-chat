@@ -62,16 +62,18 @@ Or pass everything as flags:
 | `--token` | OAuth token (or set `TWITCH_TOKEN`) |
 | `--nick` | Twitch username (or set `TWITCH_NICK`) |
 | `--hide-joins` | Hide "joined/left the channel" lines -- handy in large channels where they're mostly noise |
-| `--poll-chatters` | Poll the chatter list at this interval (e.g. `30s`, minimum `10s`) for accurate join/leave tracking. Off by default. See below |
+| `--poll-chatters` | Poll the delayed chatter list at this interval (e.g. `30s`, minimum `10s`) to supplement IRC join/leave tracking. Off by default. See below |
 
 ### Join/leave accuracy
 
 Twitch has no real-time join/leave feed, so the client combines two sources:
 
-- **IRC `JOIN`/`PART`** (always on): low latency but batched, can be dropped or duplicated, and Twitch stops sending them entirely once a chat has more than 1,000 users.
-- **Get Chatters polling** (`--poll-chatters=30s`): the full list of logged-in users connected to chat, compared on each poll to catch anything IRC missed. Twitch's list itself lags by an undocumented amount, so polling faster than ~30s gains little.
+- **IRC `JOIN`/`PART`** (always on): membership events can arrive late or out of order and may be duplicated. Twitch does not send them when a chat has more than 1,000 users.
+- **Get Chatters polling** (`--poll-chatters=30s`): compares lists of users connected to chat to detect changes IRC may have missed. Twitch documents a delay in updating this list but does not specify a maximum delay. Each poll starts after the previous poll completes and the configured interval has elapsed.
 
-Both feed one presence list, so each join or leave is printed once, with the time it was detected. Viewers who are logged out or don't have chat open can't be seen by either source.
+Both feed one presence list that suppresses repeated membership events. A recent IRC event takes precedence over conflicting API snapshots for at least one minute (or twice the polling interval, whichever is longer). The first snapshot establishes the initial list silently while preserving recent IRC events.
+
+Lines show **detected at** times, not the actual time a user joined or left. This is best-effort presence tracking: a short visit can be missed entirely if no IRC events arrive and the user is absent from the sampled lists. It tracks chat connections, not everyone watching the stream. See Twitch's [IRC documentation](https://dev.twitch.tv/docs/chat/irc/) and [Get Chatters reference](https://dev.twitch.tv/docs/api/reference/#get-chatters).
 
 Polling requires a token with the `moderator:read:chatters` scope, belonging to the broadcaster or one of their moderators. On [twitchtokengenerator.com](https://twitchtokengenerator.com), choose **Custom Scope Token** and select `chat:read`, `chat:edit`, and `moderator:read:chatters`. If the token can't be used for polling, the client shows why and carries on with IRC only.
 
