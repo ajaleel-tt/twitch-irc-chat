@@ -62,6 +62,22 @@ Or pass everything as flags:
 | `--token` | OAuth token (or set `TWITCH_TOKEN`) |
 | `--nick` | Twitch username (or set `TWITCH_NICK`) |
 | `--hide-joins` | Hide "joined/left the channel" lines -- handy in large channels where they're mostly noise |
+| `--poll-chatters` | Poll the chatter list at this interval (e.g. `30s`, minimum `10s`) for accurate join/leave tracking. Off by default. See below |
+
+### Join/leave accuracy
+
+Twitch has no real-time join/leave feed, so the client combines two sources:
+
+- **IRC `JOIN`/`PART`** (always on): low latency but batched, can be dropped or duplicated, and Twitch stops sending them entirely once a chat has more than 1,000 users.
+- **Get Chatters polling** (`--poll-chatters=30s`): the full list of logged-in users connected to chat, compared on each poll to catch anything IRC missed. Twitch's list itself lags by an undocumented amount, so polling faster than ~30s gains little.
+
+Both feed one presence list, so each join or leave is printed once, with the time it was detected. Viewers who are logged out or don't have chat open can't be seen by either source.
+
+Polling requires a token with the `moderator:read:chatters` scope, belonging to the broadcaster or one of their moderators. On [twitchtokengenerator.com](https://twitchtokengenerator.com), choose **Custom Scope Token** and select `chat:read`, `chat:edit`, and `moderator:read:chatters`. If the token can't be used for polling, the client shows why and carries on with IRC only.
+
+```bash
+./twitch-irc-chat --channel your_channel --poll-chatters=30s
+```
 
 ### Controls
 
@@ -78,12 +94,16 @@ Or pass everything as flags:
 ```
 twitch-irc-chat/
 ├── main.go           # Entry point, flag parsing
+├── helix/
+│   ├── client.go     # Helix API: token validation, Get Users, Get Chatters
+│   └── client_test.go
 ├── irc/
 │   ├── client.go     # WebSocket connection, auth, read/write
 │   ├── message.go    # IRC message parser
 │   └── message_test.go
 └── ui/
     ├── model.go      # Bubbletea TUI (viewport + text input)
+    ├── presence.go   # Merges IRC JOIN/PART and chatter polls into one presence list
     └── styles.go     # Username colors, badges, layout styles
 ```
 

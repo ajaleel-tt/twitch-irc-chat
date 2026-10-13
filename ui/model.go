@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
+	"twitch-chat/helix"
 	"twitch-chat/irc"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -22,9 +24,34 @@ type sendResult struct {
 	err  error
 }
 
+// chattersMsg carries the result of one Get Chatters poll.
+type chattersMsg struct {
+	logins []string
+	err    error
+}
+
+// validateMsg carries the result of the hourly token validation.
+type validateMsg struct {
+	err error
+}
+
+const (
+	pollTimeout      = 10 * time.Second
+	validateInterval = time.Hour
+	minPollGrace     = time.Minute
+)
+
 // Options configures optional display behavior of the chat UI.
 type Options struct {
 	HideJoins bool // suppress "joined/left the channel" lines
+
+	// Chatter polling. Enabled when Helix is non-nil and PollInterval > 0.
+	Helix         *helix.Client
+	PollInterval  time.Duration
+	BroadcasterID string
+	ModeratorID   string
+
+	StartupNotes []string // system lines shown when the UI starts
 }
 
 // Model is the Bubbletea model for the chat UI.
@@ -39,6 +66,11 @@ type Model struct {
 	nick     string
 	opts     Options
 	ready    bool
+
+	presence    presence
+	polling     bool   // whether chatter polls are still being scheduled
+	lastPollErr string // last poll error shown, to avoid repeating it
+	now         func() time.Time
 }
 
 // NewModel creates a new chat UI model.
@@ -48,16 +80,23 @@ func NewModel(client *irc.Client, ctx context.Context, channel, nick string, opt
 	ti.Focus()
 	ti.CharLimit = 500
 
-	return Model{
-		client:  client,
-		ctx:     ctx,
-		input:   ti,
-		channel: channel,
-		nick:    nick,
-		opts:    opts,
-		lines:   []string{},
-		sent:    make(map[string]int),
+	m := Model{
+		client:   client,
+		ctx:      ctx,
+		input:    ti,
+		channel:  channel,
+		nick:     nick,
+		opts:     opts,
+		lines:    []string{},
+		sent:     make(map[string]int),
+		presence: newPresence(max(minPollGrace, 2*opts.PollInterval)),
+		polling:  opts.Helix != nil && opts.PollInterval > 0,
+		now:      time.Now,
 	}
+	for _, note := range opts.StartupNotes {
+		m.appendLine(systemStyle.Render(note))
+	}
+	return m
 }
 
 func waitForIRC(incoming <-chan irc.Message) tea.Cmd {
@@ -70,11 +109,42 @@ func waitForIRC(incoming <-chan irc.Message) tea.Cmd {
 	}
 }
 
+// pollChatters fetches the chatter list after delay. The next poll is only
+// scheduled once this one's result is handled, so polls never overlap.
+func (m Model) pollChatters(delay time.Duration) tea.Cmd {
+	h, ctx := m.opts.Helix, m.ctx
+	bID, modID := m.opts.BroadcasterID, m.opts.ModeratorID
+	fetch := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, pollTimeout)
+		defer cancel()
+		logins, err := h.Chatters(ctx, bID, modID)
+		return chattersMsg{logins: logins, err: err}
+	}
+	if delay <= 0 {
+		return fetch
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg { return fetch() })
+}
+
+func (m Model) validateLater() tea.Cmd {
+	h, ctx := m.opts.Helix, m.ctx
+	return tea.Tick(validateInterval, func(time.Time) tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, pollTimeout)
+		defer cancel()
+		_, err := h.Validate(ctx)
+		return validateMsg{err: err}
+	})
+}
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textinput.Blink,
 		waitForIRC(m.client.Incoming()),
-	)
+	}
+	if m.polling {
+		cmds = append(cmds, m.pollChatters(0), m.validateLater())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -130,14 +200,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ircMsg:
 		m.handleIRC(irc.Message(msg))
-		if m.ready {
-			atBottom := m.viewport.AtBottom()
-			m.viewport.SetContent(m.wrappedContent())
-			if atBottom {
-				m.viewport.GotoBottom()
-			}
-		}
+		m.refresh()
 		cmds = append(cmds, waitForIRC(m.client.Incoming()))
+
+	case chattersMsg:
+		cmds = append(cmds, m.handleChatters(msg))
+		m.refresh()
+
+	case validateMsg:
+		cmds = append(cmds, m.handleValidate(msg))
+		m.refresh()
 	}
 
 	var cmd tea.Cmd
@@ -171,13 +243,18 @@ func (m *Model) handleIRC(msg irc.Message) {
 		m.appendLine(line)
 
 	case "JOIN":
-		if msg.Nick != "" && !m.opts.HideJoins {
-			m.appendLine(systemStyle.Render(fmt.Sprintf("* %s joined the channel", msg.Nick)))
+		if msg.Nick != "" && m.presence.join(msg.Nick, m.now()) {
+			m.joinLine(msg.Nick, "joined")
 		}
 
 	case "PART":
-		if msg.Nick != "" && !m.opts.HideJoins {
-			m.appendLine(systemStyle.Render(fmt.Sprintf("* %s left the channel", msg.Nick)))
+		if msg.Nick != "" && m.presence.part(msg.Nick, m.now()) {
+			m.joinLine(msg.Nick, "left")
+		}
+
+	case "353": // NAMES: "<nick> = #channel :name1 name2 ..."
+		if i := strings.LastIndex(msg.Params, " :"); i != -1 {
+			m.presence.seed(strings.Fields(msg.Params[i+2:]))
 		}
 
 	case "NOTICE":
@@ -208,6 +285,74 @@ func (m *Model) handleIRC(msg irc.Message) {
 
 	case "CLEARMSG":
 		m.appendLine(systemStyle.Render("[MOD] Message deleted"))
+	}
+}
+
+// handleChatters applies a poll result and returns the command for the next
+// poll, or nil if polling has stopped.
+func (m *Model) handleChatters(msg chattersMsg) tea.Cmd {
+	if !m.polling {
+		return nil
+	}
+	if msg.err != nil {
+		if helix.IsAuthError(msg.err) {
+			m.polling = false
+			m.appendLine(systemStyle.Render("[WARN] Chatter polling stopped: " + msg.err.Error()))
+			return nil
+		}
+		if text := msg.err.Error(); text != m.lastPollErr {
+			m.lastPollErr = text
+			m.appendLine(systemStyle.Render("[WARN] Chatter poll failed: " + text))
+		}
+		return m.pollChatters(m.opts.PollInterval)
+	}
+	m.lastPollErr = ""
+	first := !m.presence.seeded
+	joined, left := m.presence.reconcile(msg.logins, m.now())
+	if first && !m.opts.HideJoins {
+		m.appendLine(systemStyle.Render(fmt.Sprintf("* %d chatters in channel", len(msg.logins))))
+	}
+	for _, l := range joined {
+		m.joinLine(l, "joined")
+	}
+	for _, l := range left {
+		m.joinLine(l, "left")
+	}
+	return m.pollChatters(m.opts.PollInterval)
+}
+
+// handleValidate stops polling if the token is no longer valid, otherwise
+// schedules the next hourly validation.
+func (m *Model) handleValidate(msg validateMsg) tea.Cmd {
+	if !m.polling {
+		return nil
+	}
+	if helix.IsAuthError(msg.err) {
+		m.polling = false
+		m.appendLine(systemStyle.Render("[WARN] Token is no longer valid; chatter polling stopped"))
+		return nil
+	}
+	return m.validateLater()
+}
+
+// joinLine prints a timestamped join/leave line unless they are hidden.
+func (m *Model) joinLine(login, verb string) {
+	if m.opts.HideJoins {
+		return
+	}
+	ts := m.now().Format("15:04:05")
+	m.appendLine(systemStyle.Render(fmt.Sprintf("* %s %s %s the channel", ts, login, verb)))
+}
+
+// refresh re-renders the viewport, staying pinned to the bottom if it was.
+func (m *Model) refresh() {
+	if !m.ready {
+		return
+	}
+	atBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(m.wrappedContent())
+	if atBottom {
+		m.viewport.GotoBottom()
 	}
 }
 
