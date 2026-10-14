@@ -64,6 +64,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// The UI also exits when the connection drops; say why instead of
+	// vanishing silently. Err is nil if the user quit.
+	if err := client.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Disconnected: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 const minPollInterval = 10 * time.Second
