@@ -26,7 +26,7 @@ func (f *fakeClient) SendMessage(_ context.Context, text string) error {
 
 func newTestModel(t *testing.T, client *fakeClient) Model {
 	t.Helper()
-	m := NewModel(client, context.Background(), "mychannel", "me")
+	m := NewModel(client, context.Background(), "mychannel", "me", Options{})
 	return update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 }
 

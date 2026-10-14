@@ -29,6 +29,16 @@ func TestParseMessage(t *testing.T) {
 			},
 		},
 		{
+			name: "NAMES reply",
+			raw:  ":me.tmi.twitch.tv 353 me = #mychannel :alice bob",
+			want: Message{
+				Tags:    map[string]string{},
+				Source:  "me.tmi.twitch.tv",
+				Command: "353",
+				Params:  "me = #mychannel :alice bob",
+			},
+		},
+		{
 			name: "PING",
 			raw:  "PING :tmi.twitch.tv",
 			want: Message{
