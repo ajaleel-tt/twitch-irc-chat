@@ -57,20 +57,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := run(*channel, tok, name, anonymous); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
+
+// run connects and drives the UI. It returns errors instead of exiting so
+// its deferred cleanup (closing the socket, cancelling the context) runs
+// before main calls os.Exit, which skips defers.
+func run(channel, token, nick string, anonymous bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	client := irc.NewClient(name, *channel)
-	if err := client.Connect(ctx, tok); err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting: %v\n", err)
-		os.Exit(1)
-	}
+	client := irc.NewClient(nick, channel)
+	// Deferred before Connect so a connection that dials but then fails a
+	// handshake write is still closed. Close is a no-op if nothing was dialed.
 	defer client.Close()
-
-	model := ui.NewModel(client, ctx, *channel, name, anonymous)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if err := client.Connect(ctx, token); err != nil {
+		return fmt.Errorf("connecting: %w", err)
 	}
+
+	model := ui.NewModel(client, ctx, channel, nick, anonymous)
+	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
+		return err
+	}
+	return nil
 }
