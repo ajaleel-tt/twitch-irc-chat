@@ -38,25 +38,39 @@ type Model struct {
 	sent     map[string]int // text -> count of pending local echoes to dedupe
 	channel  string
 	nick     string
-	ready    bool
+	// anonymous is a read-only justinfan login: Twitch drops anything it
+	// sends, so the UI refuses to send rather than show a fake echo.
+	anonymous bool
+	ready     bool
 }
 
+const anonymousNotice = "[*] Logged in anonymously: you can read chat but not send. " +
+	"Restart with --token and --nick (or TWITCH_TOKEN and TWITCH_NICK) to chat."
+
 // NewModel creates a new chat UI model.
-func NewModel(client ChatClient, ctx context.Context, channel, nick string) Model {
+func NewModel(client ChatClient, ctx context.Context, channel, nick string, anonymous bool) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message..."
+	if anonymous {
+		ti.Placeholder = "Read-only (anonymous). Type /quit to exit."
+	}
 	ti.Focus()
 	ti.CharLimit = 500
 
-	return Model{
-		client:  client,
-		ctx:     ctx,
-		input:   ti,
-		channel: channel,
-		nick:    nick,
-		lines:   []string{},
-		sent:    make(map[string]int),
+	m := Model{
+		client:    client,
+		ctx:       ctx,
+		input:     ti,
+		channel:   channel,
+		nick:      nick,
+		anonymous: anonymous,
+		lines:     []string{},
+		sent:      make(map[string]int),
 	}
+	if anonymous {
+		m.appendLine(systemStyle.Render(anonymousNotice))
+	}
+	return m
 }
 
 func waitForIRC(incoming <-chan irc.Message) tea.Cmd {
@@ -93,6 +107,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if text == "/quit" {
 				return m, tea.Quit
+			}
+			if m.anonymous {
+				m.input.Reset()
+				m.appendLine(systemStyle.Render("[ERROR] Not sent: anonymous mode is read-only"))
+				if m.ready {
+					m.viewport.SetContent(m.wrappedContent())
+					m.viewport.GotoBottom()
+				}
+				return m, nil
 			}
 			m.input.Reset()
 			client := m.client

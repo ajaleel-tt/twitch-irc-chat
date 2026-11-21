@@ -56,12 +56,15 @@ func (c *Client) Connect(ctx context.Context, token string) error {
 		return fmt.Errorf("cap req: %w", err)
 	}
 
-	// Authenticate
-	if !strings.HasPrefix(token, "oauth:") {
-		token = "oauth:" + token
-	}
-	if err := c.send(ctx, "PASS "+token); err != nil {
-		return fmt.Errorf("pass: %w", err)
+	// Authenticate. An empty token means an anonymous (justinfan) login,
+	// which Twitch accepts without PASS.
+	if token != "" {
+		if !strings.HasPrefix(token, "oauth:") {
+			token = "oauth:" + token
+		}
+		if err := c.send(ctx, "PASS "+token); err != nil {
+			return fmt.Errorf("pass: %w", err)
+		}
 	}
 	if err := c.send(ctx, "NICK "+c.nick); err != nil {
 		return fmt.Errorf("nick: %w", err)

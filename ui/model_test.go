@@ -26,7 +26,7 @@ func (f *fakeClient) SendMessage(_ context.Context, text string) error {
 
 func newTestModel(t *testing.T, client *fakeClient) Model {
 	t.Helper()
-	m := NewModel(client, context.Background(), "mychannel", "me")
+	m := NewModel(client, context.Background(), "mychannel", "me", false)
 	return update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 }
 
@@ -116,6 +116,34 @@ func TestEnterIgnoresBlankAndQuits(t *testing.T) {
 	}
 	if len(client.sent) != 0 {
 		t.Errorf("client.sent = %q, want nothing sent", client.sent)
+	}
+}
+
+func TestAnonymousShowsNoticeAndDoesNotSend(t *testing.T) {
+	client := &fakeClient{}
+	m := NewModel(client, context.Background(), "mychannel", "justinfan12345", true)
+	m = update(t, m, tea.WindowSizeMsg{Width: 200, Height: 24})
+
+	m.input.SetValue("hello")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil {
+		t.Errorf("anonymous Enter produced a command, want none")
+	}
+	if len(client.sent) != 0 {
+		t.Errorf("client.sent = %q, want nothing sent", client.sent)
+	}
+	assertLines(t, m,
+		anonymousNotice,
+		"[ERROR] Not sent: anonymous mode is read-only",
+	)
+
+	// /quit still works.
+	m.input.SetValue("/quit")
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("/quit produced no command")
+	} else if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("/quit command did not return tea.QuitMsg")
 	}
 }
 
