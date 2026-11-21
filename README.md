@@ -12,15 +12,14 @@ A terminal-based Twitch chat client. Connect to any channel, read live chat, and
 - Scrollable chat history (1000-line buffer)
 - Sub/resub notifications, timeouts, bans, and chat clears
 - Auto PING/PONG keepalive
-- Send confirmation -- your message only appears after a successful write
+- Send confirmation -- your message only appears after a successful write. A successful write does not mean Twitch posted it: Twitch can still drop the message, for example in followers-only mode.
 
 ## Setup
 
 ### Prerequisites
 
 - [Go](https://go.dev/dl/) 1.24+
-- A Twitch account
-- An OAuth token (see below)
+- A Twitch account and OAuth token, to send messages (reading works without them)
 
 ### Get an OAuth Token
 
@@ -53,6 +52,18 @@ Or pass everything as flags:
 ```bash
 ./twitch-irc-chat --channel xqc --token your_oauth_token --nick your_twitch_username
 ```
+
+The token and nick go together: set both to chat, or neither to read anonymously.
+
+### Anonymous (read-only) mode
+
+With no token and no nick, the app logs in as Twitch's anonymous `justinfan12345` user:
+
+```bash
+./twitch-irc-chat --channel xqc
+```
+
+You can read chat, but Twitch silently drops anything an anonymous user sends. So the app shows a notice at startup and refuses to send. Passing only one of `--token`/`--nick` is an error rather than a silent fallback to anonymous mode.
 
 ### Controls
 
